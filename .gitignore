@@ -1,0 +1,8 @@
+# Build artifacts
+*.exe
+*.exe~
+*.syso
+
+# Logs / scratch
+*.log
+smoke.txt
