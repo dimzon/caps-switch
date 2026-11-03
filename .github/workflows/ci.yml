@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: |
+          go run github.com/akavel/rsrc@latest -ico assets/icon.ico -o rsrc.syso -arch amd64
+          go build -trimpath -ldflags "-s -w -H windowsgui" -o caps-switch.exe .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: caps-switch-windows-amd64
+          path: caps-switch.exe
+          if-no-files-found: error

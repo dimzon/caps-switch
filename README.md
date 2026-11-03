@@ -4,6 +4,12 @@
   <img src="assets/icon.png" width="128" alt="caps-switch icon">
 </p>
 
+<p align="center">
+  <a href="https://github.com/dimzon/caps-switch/actions/workflows/ci.yml"><img src="https://github.com/dimzon/caps-switch/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/dimzon/caps-switch/actions/workflows/release.yml"><img src="https://github.com/dimzon/caps-switch/actions/workflows/release.yml/badge.svg" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT"></a>
+</p>
+
 <p align="center"><b>Single-key keyboard layout switching on Windows — press Caps Lock, flip the layout.</b></p>
 
 Windows has no built-in way to switch the keyboard layout with a single key. **caps-switch** makes **Caps Lock** do exactly that (like `grp:caps_toggle` on Linux), with a tray icon and a live mode switcher.
@@ -27,11 +33,22 @@ Windows has no built-in way to switch the keyboard layout with a single key. **c
 
 Requires Go 1.21+.
 
-```sh
-go build -ldflags "-H windowsgui" -o caps-switch.exe .
+The app icon is embedded into the executable with [`rsrc`](https://github.com/akavel/rsrc). The included script does it for you:
+
+```powershell
+./build.ps1
 ```
 
-The tray icon is loaded from `icon.ico` or `assets/icon.ico` next to the executable; otherwise the system icon is used.
+Or manually:
+
+```sh
+go run github.com/akavel/rsrc@latest -ico assets/icon.ico -o rsrc.syso -arch amd64
+go build -trimpath -ldflags "-s -w -H windowsgui" -o caps-switch.exe .
+```
+
+At runtime the tray icon is loaded from `icon.ico` or `assets/icon.ico` next to the executable; otherwise the embedded/system icon is used.
+
+Prebuilt binaries for every release are on the [Releases](https://github.com/dimzon/caps-switch/releases) page.
 
 ## Usage
 
