@@ -23,11 +23,12 @@ Windows has no built-in way to switch the keyboard layout with a single key. **c
   |------|-----------------|-------|
   | `direct` (default) | `SendMessage(WM_INPUTLANGCHANGEREQUEST)` | Fast; works in most apps |
   | `attach` | `AttachThreadInput` + `ActivateKeyboardLayout` | Bypasses the message queue |
-  | `keys` | `SendInput` of `Ctrl+Shift` | Universal fallback; needs `LanguageHotkey=2` |
+  | `Alt+Shift` | `SendInput` of `Alt+Shift` | Emulation; needs the system hotkey |
+  | `Ctrl+Shift` | `SendInput` of `Ctrl+Shift` | Emulation; needs the system hotkey |
 
 - **Tray icon** with a checkmark menu: pick a mode, or exit.
 - **No dependencies.** One static `.exe`, pure Win32 through `syscall`.
-- **Exit** with `Ctrl+Alt+Q` or the tray menu.
+- **Exit** from the tray menu.
 
 ## Build
 
@@ -57,16 +58,17 @@ Prebuilt binaries for every release are on the [Releases](https://github.com/dim
 3. Right- or left-click the tray icon to choose a mode or exit.
 4. To autostart, put a shortcut to `caps-switch.exe` in `shell:startup`.
 
-### The `keys` mode
+### Emulation modes (`Alt+Shift`, `Ctrl+Shift`)
 
-`keys` emulates the `Ctrl+Shift` hotkey, so Windows must have that hotkey assigned:
+These modes send the real chord with `SendInput`, so Windows must already have the matching switching hotkey assigned. **caps-switch never writes to the registry** — use the ready-made files in [`registry/`](registry/):
 
-```
-HKCU\Keyboard Layout\Toggle
-  LanguageHotkey = "2"   (and/or Hotkey = "2")
-```
+| File | Effect |
+|------|--------|
+| [`registry/alt-shift.reg`](registry/alt-shift.reg) | assign Alt+Shift (`LanguageHotkey`/`Hotkey` = `1`) |
+| [`registry/ctrl-shift.reg`](registry/ctrl-shift.reg) | assign Ctrl+Shift (= `2`) |
+| [`registry/restore-default.reg`](registry/restore-default.reg) | remove the assignment and restore defaults |
 
-`direct` and `attach` do not need any hotkey.
+Double-click a file and confirm, or run `reg import registry\alt-shift.reg`. A sign-out may be needed for the hotkey to take effect. `direct` and `attach` do not need any hotkey at all.
 
 ## How it works
 

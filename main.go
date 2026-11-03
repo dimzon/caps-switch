@@ -1,14 +1,17 @@
 // caps-switch — Caps Lock переключает раскладку + иконка в трее.
 //
-// Меню в трее: выбор режима (Direct / Attach / Keys) и выход.
-//   direct — PostMessage(WM_INPUTLANGCHANGEREQUEST) в активное окно
-//   attach — AttachThreadInput + ActivateKeyboardLayout (самый "прямой")
-//   keys   — эмуляция Ctrl+Shift через SendInput (fallback, нужен LanguageHotkey=2)
+// Меню в трее: выбор режима (Direct / Attach / Alt+Shift / Ctrl+Shift) и выход.
+//   direct     — SendMessage(WM_INPUTLANGCHANGEREQUEST) в активное окно
+//   attach     — AttachThreadInput + ActivateKeyboardLayout (самый "прямой")
+//   alt+shift  — эмуляция Alt+Shift через SendInput (хоткей задаётся в системе вручную)
+//   ctrl+shift — эмуляция Ctrl+Shift через SendInput (хоткей задаётся в системе вручную)
+//
+// Тул не пишет в реестр.
 //
 // Сборка:
 //   go build -ldflags "-H windowsgui" -o caps-switch.exe .
 //
-// Выход: меню в трее или Ctrl+Alt+Q.
+// Выход: только через меню в трее.
 package main
 
 import (
@@ -41,7 +44,6 @@ var (
 	procSendInput                = user32.NewProc("SendInput")
 	procAttachThreadInput        = user32.NewProc("AttachThreadInput")
 	procActivateKeyboardLayout   = user32.NewProc("ActivateKeyboardLayout")
-	procRegisterHotKey           = user32.NewProc("RegisterHotKey")
 	procRegisterClassExW         = user32.NewProc("RegisterClassExW")
 	procCreateWindowExW          = user32.NewProc("CreateWindowExW")
 	procDefWindowProcW           = user32.NewProc("DefWindowProcW")
@@ -69,7 +71,6 @@ const (
 	WM_SYSKEYDOWN             = 0x0104
 	WM_SYSKEYUP               = 0x0105
 	WM_INPUTLANGCHANGEREQUEST = 0x0050
-	WM_HOTKEY                 = 0x0312
 	WM_COMMAND                = 0x0111
 	WM_DESTROY                = 0x0002
 	WM_NULL                   = 0x0000
@@ -78,12 +79,10 @@ const (
 	WM_RBUTTONUP              = 0x0205
 	VK_CAPITAL                = 0x14
 	VK_LCONTROL               = 0xA2
+	VK_LALT                   = 0xA4
 	VK_LSHIFT                 = 0xA0
-	VK_Q                      = 0x51
 	INPUT_KEYBOARD            = 1
 	KEYEVENTF_KEYUP           = 0x0002
-	MOD_ALT                   = 0x0001
-	MOD_CONTROL               = 0x0002
 
 	MF_STRING       = 0x0000
 	MF_CHECKED      = 0x0008
@@ -111,14 +110,16 @@ const (
 const (
 	modeDirect int32 = iota
 	modeAttach
-	modeKeys
+	modeAltShift
+	modeCtrlShift
 )
 
 const (
-	idModeDirect = 1001
-	idModeAttach = 1002
-	idModeKeys   = 1003
-	idExit       = 1099
+	idModeDirect    = 1001
+	idModeAttach    = 1002
+	idModeAltShift  = 1003
+	idModeCtrlShift = 1004
+	idExit          = 1099
 )
 
 type KBDLLHOOKSTRUCT struct {
@@ -282,27 +283,30 @@ func switchAttach() uintptr {
 	return hklNext
 }
 
-func switchKeys() {
-	mk := func(vk uint16, flags uint32) INPUT {
-		return INPUT{Type: INPUT_KEYBOARD, Ki: KEYBDINPUT{WVk: vk, DwFlags: flags}}
+// sendChord жмёт клавиши по порядку и отпускает в обратном.
+func sendChord(keys ...uint16) {
+	ins := make([]INPUT, 0, len(keys)*2)
+	for _, k := range keys {
+		ins = append(ins, INPUT{Type: INPUT_KEYBOARD, Ki: KEYBDINPUT{WVk: k}})
 	}
-	ins := []INPUT{
-		mk(VK_LCONTROL, 0),
-		mk(VK_LSHIFT, 0),
-		mk(VK_LSHIFT, KEYEVENTF_KEYUP),
-		mk(VK_LCONTROL, KEYEVENTF_KEYUP),
+	for i := len(keys) - 1; i >= 0; i-- {
+		ins = append(ins, INPUT{Type: INPUT_KEYBOARD, Ki: KEYBDINPUT{WVk: keys[i], DwFlags: KEYEVENTF_KEYUP}})
 	}
 	procSendInput.Call(uintptr(len(ins)), uintptr(unsafe.Pointer(&ins[0])), unsafe.Sizeof(ins[0]))
 }
+
+func switchAltShift()  { sendChord(VK_LALT, VK_LSHIFT) }
+func switchCtrlShift() { sendChord(VK_LCONTROL, VK_LSHIFT) }
 
 func doSwitch() {
 	var hkl uintptr
 	switch atomic.LoadInt32(&modeCode) {
 	case modeAttach:
 		hkl = switchAttach()
-	case modeKeys:
-		switchKeys()
-		return
+	case modeAltShift:
+		switchAltShift()
+	case modeCtrlShift:
+		switchCtrlShift()
 	default:
 		hkl = switchDirect()
 	}
@@ -315,11 +319,20 @@ func modeName(c int32) string {
 	switch c {
 	case modeAttach:
 		return "attach"
-	case modeKeys:
-		return "keys"
+	case modeAltShift:
+		return "alt+shift"
+	case modeCtrlShift:
+		return "ctrl+shift"
 	default:
 		return "direct"
 	}
+}
+
+// selectMode переключает режим и сбрасывает lastTarget. Реестр не трогаем.
+func selectMode(m int32) {
+	atomic.StoreInt32(&modeCode, m)
+	atomic.StoreUintptr(&lastTarget, 0)
+	updateTrayTip()
 }
 
 // ---------- трей ----------
@@ -437,7 +450,8 @@ func showMenu(hwnd uintptr) {
 	cur := atomic.LoadInt32(&modeCode)
 	appendMenu(hMenu, MF_STRING|check(cur == modeDirect), idModeDirect, "Direct — WM_INPUTLANGCHANGEREQUEST")
 	appendMenu(hMenu, MF_STRING|check(cur == modeAttach), idModeAttach, "Attach — ActivateKeyboardLayout")
-	appendMenu(hMenu, MF_STRING|check(cur == modeKeys), idModeKeys, "Keys — Ctrl+Shift (эмуляция)")
+	appendMenu(hMenu, MF_STRING|check(cur == modeAltShift), idModeAltShift, "Alt+Shift — эмуляция")
+	appendMenu(hMenu, MF_STRING|check(cur == modeCtrlShift), idModeCtrlShift, "Ctrl+Shift — эмуляция")
 	appendMenu(hMenu, MF_SEPARATOR, 0, "")
 	appendMenu(hMenu, MF_STRING, idExit, "Выход")
 
@@ -459,17 +473,13 @@ func showMenu(hwnd uintptr) {
 func handleCommand(hwnd uintptr, id int) {
 	switch id {
 	case idModeDirect:
-		atomic.StoreInt32(&modeCode, modeDirect)
-		atomic.StoreUintptr(&lastTarget, 0) // пересинхронизация при смене режима
-		updateTrayTip()
+		selectMode(modeDirect)
 	case idModeAttach:
-		atomic.StoreInt32(&modeCode, modeAttach)
-		atomic.StoreUintptr(&lastTarget, 0)
-		updateTrayTip()
-	case idModeKeys:
-		atomic.StoreInt32(&modeCode, modeKeys)
-		atomic.StoreUintptr(&lastTarget, 0)
-		updateTrayTip()
+		selectMode(modeAttach)
+	case idModeAltShift:
+		selectMode(modeAltShift)
+	case idModeCtrlShift:
+		selectMode(modeCtrlShift)
 	case idExit:
 		procDestroyWindow.Call(hwnd)
 	}
@@ -497,9 +507,9 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 
 // ---------- хук ----------
 
-func hookProc(nCode uintptr, wParam uintptr, lParam uintptr) uintptr {
+func hookProc(nCode uintptr, wParam uintptr, lParam unsafe.Pointer) uintptr {
 	if int32(nCode) == 0 {
-		kb := (*KBDLLHOOKSTRUCT)(unsafe.Pointer(lParam))
+		kb := (*KBDLLHOOKSTRUCT)(lParam)
 		if kb.VkCode == VK_CAPITAL {
 			switch wParam {
 			case WM_KEYDOWN, WM_SYSKEYDOWN:
@@ -513,20 +523,22 @@ func hookProc(nCode uintptr, wParam uintptr, lParam uintptr) uintptr {
 			}
 		}
 	}
-	r, _, _ := procCallNextHookEx.Call(0, nCode, wParam, lParam)
+	r, _, _ := procCallNextHookEx.Call(0, nCode, wParam, uintptr(lParam))
 	return r
 }
 
 func main() {
-	modeFlag := flag.String("mode", "direct", "direct | attach | keys")
+	modeFlag := flag.String("mode", "direct", "direct | attach | alt+shift | ctrl+shift")
 	flag.Parse()
 	switch *modeFlag {
 	case "attach":
-		atomic.StoreInt32(&modeCode, modeAttach)
-	case "keys":
-		atomic.StoreInt32(&modeCode, modeKeys)
+		selectMode(modeAttach)
+	case "alt+shift", "altshift":
+		selectMode(modeAltShift)
+	case "ctrl+shift", "ctrlshift":
+		selectMode(modeCtrlShift)
 	default:
-		atomic.StoreInt32(&modeCode, modeDirect)
+		selectMode(modeDirect)
 	}
 
 	runtime.LockOSThread()
@@ -542,8 +554,6 @@ func main() {
 		return
 	}
 	defer procUnhookWindowsHookEx.Call(hook)
-
-	procRegisterHotKey.Call(0, 1, MOD_CONTROL|MOD_ALT, VK_Q)
 
 	if initTray() {
 		defer removeTray()
@@ -561,16 +571,13 @@ func main() {
 		}
 	}()
 
-	fmt.Printf("caps-switch запущен (mode=%s). Caps = смена раскладки. Выход — Ctrl+Alt+Q или меню в трее.\n",
+	fmt.Printf("caps-switch запущен (mode=%s). Caps = смена раскладки. Выход — меню в трее.\n",
 		modeName(atomic.LoadInt32(&modeCode)))
 
 	var msg MSG
 	for {
 		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0)
 		if int32(r) <= 0 {
-			break
-		}
-		if msg.Message == WM_HOTKEY {
 			break
 		}
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
